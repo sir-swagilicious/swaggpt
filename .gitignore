@@ -10,10 +10,12 @@ build/
 venv/
 env/
 .venv/
+*.pyc
 
 # Database
 *.db
 *.sqlite3
+*.sqlite
 
 # Logs
 *.log
@@ -22,6 +24,7 @@ backend_debug.log
 # Node
 node_modules/
 npm-debug.log*
+package-lock.json
 
 # IDE
 .vscode/
@@ -29,10 +32,12 @@ npm-debug.log*
 *.swp
 *.swo
 *~
+.code-workspace
 
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
 
 # Environment
 .env
@@ -42,3 +47,6 @@ Thumbs.db
 # Ollama models (large files)
 *.gguf
 *.bin
+
+# Redis
+dump.rdb
