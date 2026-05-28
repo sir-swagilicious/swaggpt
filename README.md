@@ -146,7 +146,7 @@ Step 3: Clone and Setup the Project
 Clone or download this repository:
 
 
-git clone <your-repository-url>
+git clone https://github.com/sir-swagilicious/swaggpt
 cd llama-chat-app
 Install Python dependencies:
 
