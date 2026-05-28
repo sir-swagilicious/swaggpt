@@ -1,17 +1,40 @@
 from flask import Blueprint, request, jsonify
-from flask_login import login_user, logout_user, login_required, current_user
 from services.auth_service import AuthService
-from services.chat_service import ChatService
-from models import db, TokenTransaction
+from models import db, TokenTransaction, User
 from config import Config
 from redis_client import redis_client
+from datetime import datetime
 import secrets
+import json
+from functools import wraps
 
 auth_bp = Blueprint('auth', __name__)
 
+def jwt_required(f):
+    """Decorator to require JWT authentication"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Missing or invalid token'}), 401
+        
+        token = auth_header.split(' ')[1]
+        
+        try:
+            payload = AuthService.verify_token(token, 'access')
+            request.user_id = payload['user_id']
+            request.username = payload['username']
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 401
+        
+        return f(*args, **kwargs)
+    
+    return decorated_function
+
 @auth_bp.route('/api/auth/register', methods=['POST'])
 def register():
-    """Register a new user"""
+    """Register a new user - returns JWT tokens"""
     try:
         data = request.json
         user = AuthService.register_user(
@@ -20,67 +43,109 @@ def register():
             password=data.get('password', '')
         )
         
-        login_user(user)
+        # Create tokens
+        access_token = AuthService.create_access_token(user.id, user.username)
+        refresh_token = AuthService.create_refresh_token(user.id)
         
         return jsonify({
             'message': 'Registration successful',
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'token_type': 'bearer'
         }), 201
         
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         db.session.rollback()
-        return jsonify({'error': 'Registration failed'}), 500
+        return jsonify({'error': f'Registration failed: {str(e)}'}), 500
 
 @auth_bp.route('/api/auth/login', methods=['POST'])
 def login():
-    """Login user"""
+    """Login user - returns JWT tokens"""
     try:
         data = request.json
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+        
+        if not username or not password:
+            return jsonify({'error': 'Username and password are required'}), 400
+        
         user = AuthService.login_user(
-            username_or_email=data.get('username', '').strip(),
-            password=data.get('password', '')
+            username_or_email=username,
+            password=password
         )
         
-        login_user(user)
+        # Create tokens
+        access_token = AuthService.create_access_token(user.id, user.username)
+        refresh_token = AuthService.create_refresh_token(user.id)
         
         return jsonify({
             'message': 'Login successful',
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'token_type': 'bearer'
         }), 200
         
     except ValueError as e:
         return jsonify({'error': str(e)}), 401
     except Exception as e:
-        return jsonify({'error': 'Login failed'}), 500
+        return jsonify({'error': f'Login failed: {str(e)}'}), 500
+
+@auth_bp.route('/api/auth/refresh', methods=['POST'])
+def refresh_token():
+    """Refresh access token"""
+    try:
+        data = request.json
+        refresh_token = data.get('refresh_token')
+        
+        if not refresh_token:
+            return jsonify({'error': 'Refresh token required'}), 400
+        
+        new_access_token = AuthService.refresh_access_token(refresh_token)
+        
+        return jsonify({
+            'access_token': new_access_token,
+            'token_type': 'bearer'
+        }), 200
+        
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 401
 
 @auth_bp.route('/api/auth/logout', methods=['POST'])
-@login_required
+@jwt_required
 def logout():
-    """Logout user"""
-    AuthService.logout_user(current_user.id)
-    logout_user()
+    """Logout user - revoke refresh token"""
+    AuthService.revoke_refresh_token(request.user_id)
     return jsonify({'message': 'Logout successful'}), 200
 
 @auth_bp.route('/api/auth/user', methods=['GET'])
-@login_required
+@jwt_required
 def get_user():
     """Get current user info"""
-    return jsonify({'user': current_user.to_dict()}), 200
+    user = AuthService.get_user_by_id(request.user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    return jsonify({'user': user.to_dict()}), 200
 
 @auth_bp.route('/api/auth/tokens/add', methods=['POST'])
-@login_required
+@jwt_required
 def add_tokens():
     """Add free tokens to user account"""
     try:
         data = request.json
         amount = data.get('amount', 500)
         
-        current_user.tokens += amount
+        user = AuthService.get_user_by_id(request.user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        user.tokens += amount
         
         transaction = TokenTransaction(
-            user_id=current_user.id,
+            user_id=request.user_id,
             amount=amount,
             transaction_type='bonus',
             description='Free token refill'
@@ -91,7 +156,7 @@ def add_tokens():
         
         return jsonify({
             'message': f'Added {amount} tokens',
-            'user': current_user.to_dict()
+            'user': user.to_dict()
         }), 200
         
     except Exception as e:
@@ -99,11 +164,11 @@ def add_tokens():
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/api/auth/transactions', methods=['GET'])
-@login_required
+@jwt_required
 def get_transactions():
     """Get user's transaction history"""
     transactions = TokenTransaction.query.filter_by(
-        user_id=current_user.id
+        user_id=request.user_id
     ).order_by(TokenTransaction.created_at.desc()).limit(50).all()
     
     return jsonify({
@@ -116,9 +181,9 @@ def github_login():
     state = secrets.token_hex(16)
     redis_client.store_oauth_state(state)
     
-    github_url = f"https://github.com/login/oauth/authorize"
+    github_url = "https://github.com/login/oauth/authorize"
     github_url += f"?client_id={Config.GITHUB_CLIENT_ID}"
-    github_url += f"&redirect_uri=http://localhost:5000/api/auth/github/callback"
+    github_url += "&redirect_uri=http://localhost:5000/api/auth/github/callback"
     github_url += f"&state={state}"
     github_url += "&scope=user:email"
     
@@ -135,12 +200,17 @@ def github_callback():
             return jsonify({'error': 'Missing code or state'}), 400
         
         user = AuthService.github_oauth_callback(code, state)
-        login_user(user)
         
-        # Redirect to frontend with success
+        # Create tokens
+        access_token = AuthService.create_access_token(user.id, user.username)
+        refresh_token = AuthService.create_refresh_token(user.id)
+        
         return jsonify({
             'message': 'GitHub login successful',
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            'token_type': 'bearer'
         }), 200
         
     except ValueError as e:

@@ -1,3 +1,4 @@
+
 class ChatApp {
     constructor() {
         this.apiBaseUrl = 'http://localhost:5000/api';
@@ -21,6 +22,7 @@ class ChatApp {
         this.user = null;
         this.currentConversation = null;
         this.conversations = [];
+        this.accessToken = localStorage.getItem('access_token');
         
         this.checkAuth();
         this.initializeEventListeners();
@@ -32,11 +34,15 @@ class ChatApp {
     
     checkAuth() {
         const userData = localStorage.getItem('user');
-        if (!userData) {
+        const token = localStorage.getItem('access_token');
+        
+        if (!userData || !token) {
             window.location.href = '/login.html';
             return;
         }
+        
         this.user = JSON.parse(userData);
+        this.accessToken = token;
         this.updateTokenDisplay();
     }
     
@@ -45,60 +51,122 @@ class ChatApp {
             this.tokenCount.textContent = this.user.tokens ? this.user.tokens.toLocaleString() : '0';
         }
         if (this.tokenWarning) {
-            this.tokenWarning.style.display = this.user.tokens < 100 ? 'block' : 'none';
+            if (this.user.tokens < 100) {
+                this.tokenWarning.style.display = 'block';
+            } else {
+                this.tokenWarning.style.display = 'none';
+            }
         }
         if (this.user.tokens <= 0) {
-            this.userInput.disabled = true;
-            this.userInput.placeholder = 'Out of tokens! Click "Get Tokens" to continue.';
+            if (this.userInput) {
+                this.userInput.disabled = true;
+                this.userInput.placeholder = 'Out of tokens! Click "Get Tokens" to continue.';
+            }
         } else {
-            this.userInput.disabled = false;
-            this.userInput.placeholder = 'Type your message here... (Shift+Enter for new line)';
+            if (this.userInput) {
+                this.userInput.disabled = false;
+                this.userInput.placeholder = 'Type your message here... (Shift+Enter for new line)';
+            }
         }
-        this.updateSendButton();
+        this._updateSendButtonState();
+    }
+    
+    _updateSendButtonState() {
+        // Direct state update without triggering events
+        if (!this.sendButton || !this.userInput) return;
+        
+        const hasText = this.userInput.value.trim().length > 0;
+        const hasTokens = this.user && this.user.tokens > 0;
+        const shouldEnable = hasText && !this.isProcessing && hasTokens;
+        
+        this.sendButton.disabled = !shouldEnable;
+    }
+    
+    updateSendButton() {
+        this._updateSendButtonState();
     }
     
     initializeEventListeners() {
-        this.sendButton.addEventListener('click', () => this.sendMessage());
-        
-        this.userInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+        if (this.sendButton) {
+            this.sendButton.addEventListener('click', (e) => {
                 e.preventDefault();
                 this.sendMessage();
-            }
+            });
+        }
+        
+        if (this.userInput) {
+            this.userInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    this.sendMessage();
+                }
+            });
+            
+            this.userInput.addEventListener('input', () => {
+                this.userInput.style.height = 'auto';
+                this.userInput.style.height = this.userInput.scrollHeight + 'px';
+                if (this.charCount) {
+                    this.charCount.textContent = this.userInput.value.length;
+                }
+                this._updateSendButtonState();
+            });
+        }
+        
+        if (this.toggleSidebarBtn) {
+            this.toggleSidebarBtn.addEventListener('click', () => this.toggleSidebar());
+        }
+        
+        if (this.newChatBtn) {
+            this.newChatBtn.addEventListener('click', () => this.createNewConversation());
+        }
+        
+        if (this.themeButton) {
+            this.themeButton.addEventListener('click', () => this.toggleTheme());
+        }
+        
+        if (this.logoutButton) {
+            this.logoutButton.addEventListener('click', () => this.logout());
+        }
+        
+        if (this.addTokensBtn) {
+            this.addTokensBtn.addEventListener('click', () => this.addTokens());
+        }
+        
+        if (this.sidebarOverlay) {
+            this.sidebarOverlay.addEventListener('click', () => this.toggleSidebar());
+        }
+    }
+    
+    // Helper method for authenticated API calls
+    async authFetch(url, options = {}) {
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.accessToken}`
+        };
+        
+        if (options.headers) {
+            Object.assign(headers, options.headers);
+        }
+        
+        return fetch(url, {
+            ...options,
+            headers
         });
-        
-        this.userInput.addEventListener('input', () => {
-            this.userInput.style.height = 'auto';
-            this.userInput.style.height = this.userInput.scrollHeight + 'px';
-            this.charCount.textContent = this.userInput.value.length;
-            this.updateSendButton();
-        });
-        
-        this.toggleSidebarBtn.addEventListener('click', () => this.toggleSidebar());
-        this.newChatBtn.addEventListener('click', () => this.createNewConversation());
-        this.themeButton.addEventListener('click', () => this.toggleTheme());
-        this.logoutButton.addEventListener('click', () => this.logout());
-        this.addTokensBtn.addEventListener('click', () => this.addTokens());
-        this.sidebarOverlay.addEventListener('click', () => this.toggleSidebar());
-        
-        setInterval(() => this.refreshUserData(), 30000);
     }
     
     async loadConversations() {
         try {
-            console.log('📋 Loading conversations...');
-            const response = await fetch(`${this.apiBaseUrl}/conversations`, {
-                credentials: 'include'
-            });
+            const response = await this.authFetch(`${this.apiBaseUrl}/conversations`);
             
             if (response.ok) {
                 const data = await response.json();
                 this.conversations = data.conversations;
                 this.renderConversationsList();
-                console.log(`✅ Loaded ${this.conversations.length} conversations`);
+            } else if (response.status === 401) {
+                this.logout();
             }
         } catch (error) {
-            console.error('❌ Failed to load conversations:', error);
+            console.error('Failed to load conversations:', error);
         }
     }
     
@@ -141,12 +209,9 @@ class ChatApp {
     }
     
     async createNewConversation() {
-        console.log('📝 Creating new conversation...');
         try {
-            const response = await fetch(`${this.apiBaseUrl}/conversations`, {
+            const response = await this.authFetch(`${this.apiBaseUrl}/conversations`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
                 body: JSON.stringify({ title: 'New Conversation' })
             });
             
@@ -155,43 +220,38 @@ class ChatApp {
                 this.currentConversation = data.conversation;
                 await this.loadConversations();
                 this.clearChatWindow();
-                this.userInput.focus();
-                console.log(`✅ Created conversation ${this.currentConversation.id}`);
+                if (this.userInput) this.userInput.focus();
             }
         } catch (error) {
-            console.error('❌ Failed to create conversation:', error);
+            console.error('Failed to create conversation:', error);
         }
     }
     
     async loadConversation(conversationId) {
-        console.log(`📖 Loading conversation ${conversationId}...`);
         try {
-            const response = await fetch(`${this.apiBaseUrl}/conversations/${conversationId}`, {
-                credentials: 'include'
-            });
+            const response = await this.authFetch(`${this.apiBaseUrl}/conversations/${conversationId}`);
             
             if (response.ok) {
                 const data = await response.json();
                 this.currentConversation = data.conversation;
                 this.renderConversationsList();
                 this.displayMessages(data.messages);
-                console.log(`✅ Loaded conversation with ${data.messages.length} messages`);
                 
                 if (window.innerWidth <= 768) {
                     this.toggleSidebar();
                 }
             }
         } catch (error) {
-            console.error('❌ Failed to load conversation:', error);
+            console.error('Failed to load conversation:', error);
         }
     }
     
     displayMessages(messages) {
-        // Clear the chat window completely
+        if (!this.chatMessages) return;
+        
         this.chatMessages.innerHTML = '';
         
         if (!messages || messages.length === 0) {
-            // Show empty state
             this.chatMessages.innerHTML = `
                 <div class="empty-state">
                     <h2>Start a conversation</h2>
@@ -201,11 +261,9 @@ class ChatApp {
             return;
         }
         
-        // Display each message with proper role
         messages.forEach(msg => {
             const messageDiv = document.createElement('div');
             
-            // Set the correct CSS class based on role
             if (msg.role === 'user') {
                 messageDiv.className = 'message user';
             } else if (msg.role === 'assistant') {
@@ -214,7 +272,6 @@ class ChatApp {
                 messageDiv.className = 'message error';
             }
             
-            // Create content div
             const contentDiv = document.createElement('div');
             contentDiv.className = 'message-content';
             contentDiv.textContent = msg.content;
@@ -223,7 +280,6 @@ class ChatApp {
             this.chatMessages.appendChild(messageDiv);
         });
         
-        // Scroll to bottom
         this.scrollToBottom();
     }
     
@@ -231,9 +287,8 @@ class ChatApp {
         if (!confirm('Delete this conversation?')) return;
         
         try {
-            await fetch(`${this.apiBaseUrl}/conversations/${conversationId}`, {
-                method: 'DELETE',
-                credentials: 'include'
+            await this.authFetch(`${this.apiBaseUrl}/conversations/${conversationId}`, {
+                method: 'DELETE'
             });
             
             if (this.currentConversation?.id === conversationId) {
@@ -247,64 +302,41 @@ class ChatApp {
     }
     
     async sendMessage() {
+        if (!this.userInput) return;
+        
         const message = this.userInput.value.trim();
         
-        console.log('📤 sendMessage:', { 
-            message, 
-            isProcessing: this.isProcessing, 
-            tokens: this.user.tokens,
-            conversationId: this.currentConversation?.id 
-        });
-        
-        if (!message || this.isProcessing || this.user.tokens <= 0) {
-            console.log('⚠️ Cannot send');
+        if (!message || this.isProcessing || (this.user && this.user.tokens <= 0)) {
             return;
         }
         
-        // Clear empty state if present
-        const emptyState = this.chatMessages.querySelector('.empty-state');
+        // Clear empty state
+        const emptyState = this.chatMessages?.querySelector('.empty-state');
         if (emptyState) emptyState.remove();
         
-        // ADD USER MESSAGE TO UI
-        const userMsgDiv = document.createElement('div');
-        userMsgDiv.className = 'message user';
-        const userContentDiv = document.createElement('div');
-        userContentDiv.className = 'message-content';
-        userContentDiv.textContent = message;
-        userMsgDiv.appendChild(userContentDiv);
-        this.chatMessages.appendChild(userMsgDiv);
+        // Add user message to UI
+        this._addMessageToUI(message, 'user');
         
         // Clear input
         this.userInput.value = '';
         this.userInput.style.height = 'auto';
-        this.charCount.textContent = '0';
-        this.updateSendButton();
+        if (this.charCount) this.charCount.textContent = '0';
+        this._updateSendButtonState();
         
         // Show typing indicator
-        const typingIndicator = document.createElement('div');
-        typingIndicator.className = 'message assistant';
-        typingIndicator.id = 'typing-indicator';
-        typingIndicator.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
-        this.chatMessages.appendChild(typingIndicator);
-        this.scrollToBottom();
+        const typingIndicator = this._showTypingIndicator();
         
         try {
             this.isProcessing = true;
-            this.updateSendButton();
+            this._updateSendButtonState();
             
-            console.log('📡 Sending sync request...');
-            
-            const response = await fetch(`${this.apiBaseUrl}/chat/sync`, {
+            const response = await this.authFetch(`${this.apiBaseUrl}/chat/sync`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
                 body: JSON.stringify({
                     prompt: message,
                     conversation_id: this.currentConversation?.id
                 })
             });
-            
-            console.log('📥 Response status:', response.status);
             
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
@@ -312,22 +344,13 @@ class ChatApp {
             }
             
             const data = await response.json();
-            console.log('✅ Response data:', data);
             
             // Remove typing indicator
-            const typingEl = document.getElementById('typing-indicator');
-            if (typingEl) typingEl.remove();
+            this._removeTypingIndicator(typingIndicator);
             
-            // ADD ASSISTANT MESSAGE TO UI
+            // Add assistant message
             if (data.response) {
-                const assistantMsgDiv = document.createElement('div');
-                assistantMsgDiv.className = 'message assistant';
-                const assistantContentDiv = document.createElement('div');
-                assistantContentDiv.className = 'message-content';
-                assistantContentDiv.textContent = data.response;
-                assistantMsgDiv.appendChild(assistantContentDiv);
-                this.chatMessages.appendChild(assistantMsgDiv);
-                this.scrollToBottom();
+                this._addMessageToUI(data.response, 'assistant');
             }
             
             // Update tokens
@@ -335,7 +358,7 @@ class ChatApp {
                 this.user.tokens = data.tokens_remaining;
                 localStorage.setItem('user', JSON.stringify(this.user));
                 this.updateTokenDisplay();
-                this.showTokenCost(data.tokens_used);
+                this._showTokenCost(data.tokens_used);
             }
             
             // Update conversation
@@ -346,42 +369,57 @@ class ChatApp {
                 await this.loadConversations();
             }
             
-            console.log('✅ Message sent successfully');
-            
         } catch (error) {
-            console.error('❌ Error:', error);
-            
-            // Remove typing indicator
-            const typingEl = document.getElementById('typing-indicator');
-            if (typingEl) typingEl.remove();
-            
-            // Show error
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'message error';
-            const errorContent = document.createElement('div');
-            errorContent.className = 'message-content';
-            errorContent.textContent = `Error: ${error.message}`;
-            errorDiv.appendChild(errorContent);
-            this.chatMessages.appendChild(errorDiv);
-            
-            await this.refreshUserData();
+            console.error('Error:', error);
+            this._removeTypingIndicator(typingIndicator);
+            this._addMessageToUI(`Error: ${error.message}`, 'error');
         } finally {
             this.isProcessing = false;
-            this.updateSendButton();
+            this._updateSendButtonState();
         }
     }
     
-    clearChatWindow() {
-        this.chatMessages.innerHTML = '';
-        this.chatMessages.innerHTML = `
-            <div class="empty-state">
-                <h2>Start a conversation</h2>
-                <p>Send a message to begin</p>
-            </div>
-        `;
+    _addMessageToUI(content, type) {
+        if (!this.chatMessages) return;
+        
+        const messageDiv = document.createElement('div');
+        
+        if (type === 'user') {
+            messageDiv.className = 'message user';
+        } else if (type === 'assistant') {
+            messageDiv.className = 'message assistant';
+        } else {
+            messageDiv.className = 'message error';
+        }
+        
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'message-content';
+        contentDiv.textContent = content;
+        
+        messageDiv.appendChild(contentDiv);
+        this.chatMessages.appendChild(messageDiv);
+        this.scrollToBottom();
     }
     
-    showTokenCost(cost) {
+    _showTypingIndicator() {
+        if (!this.chatMessages) return null;
+        
+        const indicator = document.createElement('div');
+        indicator.className = 'message assistant typing-message';
+        indicator.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+        this.chatMessages.appendChild(indicator);
+        this.scrollToBottom();
+        
+        return indicator;
+    }
+    
+    _removeTypingIndicator(indicator) {
+        if (indicator && indicator.parentNode) {
+            indicator.remove();
+        }
+    }
+    
+    _showTokenCost(cost) {
         const notification = document.createElement('div');
         notification.textContent = `-${cost} tokens`;
         notification.style.cssText = `
@@ -400,138 +438,157 @@ class ChatApp {
         setTimeout(() => notification.remove(), 2500);
     }
     
-    toggleSidebar() {
-        this.sidebar.classList.toggle('collapsed');
-        this.sidebarOverlay.classList.toggle('active');
+    clearChatWindow() {
+        if (!this.chatMessages) return;
+        this.chatMessages.innerHTML = `
+            <div class="empty-state">
+                <h2>Start a conversation</h2>
+                <p>Send a message to begin</p>
+            </div>
+        `;
     }
     
-    // Replace the addTokens method and add these new methods to the ChatApp class
-
-async addTokens() {
-    // Create modal for token selection
-    const modal = document.createElement('div');
-    modal.className = 'token-modal';
-    modal.innerHTML = `
-        <div class="token-modal-content">
-            <h2>🎮 Earn Free Tokens</h2>
-            <p>Choose how many tokens you want to earn:</p>
-            <div class="token-options">
-                <button class="token-option-btn" data-amount="100">
-                    <div class="token-option-icon">➕</div>
-                    <div class="token-option-amount">100 Tokens</div>
-                    <div class="token-option-desc">Solve a math problem</div>
-                    <div class="token-option-difficulty easy">Easy</div>
-                </button>
-                <button class="token-option-btn" data-amount="500">
-                    <div class="token-option-icon">🦙</div>
-                    <div class="token-option-amount">500 Tokens</div>
-                    <div class="token-option-desc">Catch the running Llama</div>
-                    <div class="token-option-difficulty medium">Medium</div>
-                </button>
-                <button class="token-option-btn" data-amount="1000">
-                    <div class="token-option-icon">🎯</div>
-                    <div class="token-option-amount">1000 Tokens</div>
-                    <div class="token-option-desc">Guess the secret number</div>
-                    <div class="token-option-difficulty hard">Hard</div>
-                </button>
+    async addTokens() {
+        // Mini-game modal logic remains the same
+        const modal = document.createElement('div');
+        modal.className = 'token-modal';
+        modal.innerHTML = `
+            <div class="token-modal-content">
+                <h2>🎮 Earn Free Tokens</h2>
+                <p>Choose how many tokens you want to earn:</p>
+                <div class="token-options">
+                    <button class="token-option-btn" data-amount="100">
+                        <div class="token-option-icon">➕</div>
+                        <div class="token-option-amount">100 Tokens</div>
+                        <div class="token-option-desc">Solve a math problem</div>
+                        <div class="token-option-difficulty easy">Easy</div>
+                    </button>
+                    <button class="token-option-btn" data-amount="500">
+                        <div class="token-option-icon">🦙</div>
+                        <div class="token-option-amount">500 Tokens</div>
+                        <div class="token-option-desc">Catch the running Llama</div>
+                        <div class="token-option-difficulty medium">Medium</div>
+                    </button>
+                    <button class="token-option-btn" data-amount="1000">
+                        <div class="token-option-icon">🎯</div>
+                        <div class="token-option-amount">1000 Tokens</div>
+                        <div class="token-option-desc">Guess the secret number</div>
+                        <div class="token-option-difficulty hard">Hard</div>
+                    </button>
+                </div>
+                <button class="token-modal-close">Cancel</button>
             </div>
-            <button class="token-modal-close">Cancel</button>
-        </div>
-    `;
-    
-    document.body.appendChild(modal);
-    
-    // Add event listeners
-    modal.querySelector('.token-modal-close').addEventListener('click', () => {
-        modal.remove();
-    });
-    
-    modal.querySelectorAll('.token-option-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const amount = parseInt(btn.dataset.amount);
-            modal.remove();
-            
-            switch(amount) {
-                case 100:
-                    await this.mathGame();
-                    break;
-                case 500:
-                    await this.llamaChaseGame();
-                    break;
-                case 1000:
-                    await this.numberGuessGame();
-                    break;
-            }
+        `;
+        
+        document.body.appendChild(modal);
+        
+        modal.querySelector('.token-modal-close').addEventListener('click', () => modal.remove());
+        
+        modal.querySelectorAll('.token-option-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const amount = parseInt(btn.dataset.amount);
+                modal.remove();
+                
+                switch(amount) {
+                    case 100:
+                        await this.mathGame();
+                        break;
+                    case 500:
+                        await this.llamaChaseGame();
+                        break;
+                    case 1000:
+                        await this.numberGuessGame();
+                        break;
+                }
+            });
         });
-    });
+        
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
+    }
     
-    // Close on outside click
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) modal.remove();
-    });
-}
-
-// ============ MATH GAME (100 tokens) ============
-async mathGame() {
-    const num1 = Math.floor(Math.random() * 50) + 1;
-    const num2 = Math.floor(Math.random() * 50) + 1;
-    const correctAnswer = num1 + num2;
-    
-    const modal = document.createElement('div');
-    modal.className = 'token-modal';
-    modal.innerHTML = `
-        <div class="token-modal-content game-modal">
-            <h2>➕ Math Challenge</h2>
-            <p>Solve this problem to earn <strong>100 tokens</strong>:</p>
-            <div class="math-problem">
-                <span class="math-number">${num1}</span>
-                <span class="math-operator">+</span>
-                <span class="math-number">${num2}</span>
-                <span class="math-operator">=</span>
-                <span class="math-question">?</span>
-            </div>
-            <input type="number" class="math-input" placeholder="Your answer..." autofocus>
-            <div class="math-feedback"></div>
-            <div class="game-buttons">
-                <button class="math-submit-btn">Submit</button>
-                <button class="game-cancel-btn">Cancel</button>
-            </div>
-        </div>
-    `;
-    
-    document.body.appendChild(modal);
-    
-    const input = modal.querySelector('.math-input');
-    const feedback = modal.querySelector('.math-feedback');
-    const submitBtn = modal.querySelector('.math-submit-btn');
-    
-    const checkAnswer = () => {
-        const userAnswer = parseInt(input.value);
-        if (userAnswer === correctAnswer) {
-            feedback.innerHTML = '✅ Correct! You earned 100 tokens! 🎉';
-            feedback.style.color = '#34c759';
-            submitBtn.disabled = true;
-            input.disabled = true;
-            this.grantTokens(100);
-            setTimeout(() => modal.remove(), 2000);
-        } else {
-            feedback.innerHTML = `❌ Wrong answer. Try again!`;
-            feedback.style.color = '#ff3b30';
-            input.value = '';
-            input.focus();
+    async grantTokens(amount) {
+        try {
+            const response = await this.authFetch(`${this.apiBaseUrl}/auth/tokens/add`, {
+                method: 'POST',
+                body: JSON.stringify({ amount: amount })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                this.user = data.user;
+                localStorage.setItem('user', JSON.stringify(data.user));
+                this.updateTokenDisplay();
+            }
+        } catch (error) {
+            console.error('Failed to grant tokens:', error);
         }
-    };
+    }
     
-    submitBtn.addEventListener('click', checkAnswer);
-    input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') checkAnswer();
-    });
+    // Math game, Llama chase, Number guess methods remain the same...
+    // (Keep your existing game methods, just make sure they use this.authFetch and this.grantTokens)
     
-    modal.querySelector('.game-cancel-btn').addEventListener('click', () => modal.remove());
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) modal.remove();
-    });
-}
+    async mathGame() {
+        const num1 = Math.floor(Math.random() * 50) + 1;
+        const num2 = Math.floor(Math.random() * 50) + 1;
+        const correctAnswer = num1 + num2;
+        
+        const modal = document.createElement('div');
+        modal.className = 'token-modal';
+        modal.innerHTML = `
+            <div class="token-modal-content game-modal">
+                <h2>➕ Math Challenge</h2>
+                <p>Solve this problem to earn <strong>100 tokens</strong>:</p>
+                <div class="math-problem">
+                    <span class="math-number">${num1}</span>
+                    <span class="math-operator">+</span>
+                    <span class="math-number">${num2}</span>
+                    <span class="math-operator">=</span>
+                    <span class="math-question">?</span>
+                </div>
+                <input type="number" class="math-input" placeholder="Your answer..." autofocus>
+                <div class="math-feedback"></div>
+                <div class="game-buttons">
+                    <button class="math-submit-btn">Submit</button>
+                    <button class="game-cancel-btn">Cancel</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        const input = modal.querySelector('.math-input');
+        const feedback = modal.querySelector('.math-feedback');
+        const submitBtn = modal.querySelector('.math-submit-btn');
+        
+        const checkAnswer = () => {
+            const userAnswer = parseInt(input.value);
+            if (userAnswer === correctAnswer) {
+                feedback.innerHTML = '✅ Correct! You earned 100 tokens! 🎉';
+                feedback.style.color = '#34c759';
+                submitBtn.disabled = true;
+                input.disabled = true;
+                this.grantTokens(100);
+                setTimeout(() => modal.remove(), 2000);
+            } else {
+                feedback.innerHTML = '❌ Wrong answer. Try again!';
+                feedback.style.color = '#ff3b30';
+                input.value = '';
+                input.focus();
+            }
+        };
+        
+        submitBtn.addEventListener('click', checkAnswer);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') checkAnswer();
+        });
+        
+        modal.querySelector('.game-cancel-btn').addEventListener('click', () => modal.remove());
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
+    }
 
 // ============ LLAMA CHASE GAME (500 tokens) ============
 async llamaChaseGame() {
@@ -663,7 +720,6 @@ showLlamaResult(caught) {
     setTimeout(() => notification.remove(), 2500);
 }
 
-// ============ NUMBER GUESS GAME (1000 tokens) ============
 // ============ NUMBER GUESS GAME (1000 tokens) - UPDATED ============
 async numberGuessGame() {
     const secretNumber = Math.floor(Math.random() * 100000) + 1;
@@ -862,7 +918,7 @@ async numberGuessGame() {
 // ============ GRANT TOKENS ============
 async grantTokens(amount) {
     try {
-        const response = await fetch(`${this.apiBaseUrl}/auth/tokens/add`, {
+        const response = await this.authFetch(`${this.apiBaseUrl}/auth/tokens/add`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
@@ -882,7 +938,7 @@ async grantTokens(amount) {
     
     async refreshUserData() {
         try {
-            const response = await fetch(`${this.apiBaseUrl}/auth/user`, {
+            const response = await this.authFetch(`${this.apiBaseUrl}/auth/user`, {
                 credentials: 'include'
             });
             
@@ -899,28 +955,30 @@ async grantTokens(amount) {
         }
     }
     
+    toggleSidebar() {
+        if (this.sidebar) this.sidebar.classList.toggle('collapsed');
+        if (this.sidebarOverlay) this.sidebarOverlay.classList.toggle('active');
+    }
+    
     async logout() {
         try {
-            await fetch(`${this.apiBaseUrl}/auth/logout`, {
-                method: 'POST',
-                credentials: 'include'
+            await this.authFetch(`${this.apiBaseUrl}/auth/logout`, {
+                method: 'POST'
             });
         } catch (error) {
             console.error('Logout error:', error);
         } finally {
             localStorage.removeItem('user');
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
             window.location.href = '/login.html';
         }
     }
     
-    updateSendButton() {
-        const hasText = this.userInput.value.trim().length > 0;
-        const hasTokens = this.user && this.user.tokens > 0;
-        this.sendButton.disabled = !(hasText && !this.isProcessing && hasTokens);
-    }
-    
     scrollToBottom() {
-        this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+        if (this.chatMessages) {
+            this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+        }
     }
     
     toggleTheme() {
@@ -929,13 +987,17 @@ async grantTokens(amount) {
         const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
         html.setAttribute('data-theme', newTheme);
         localStorage.setItem('theme', newTheme);
-        this.themeButton.textContent = newTheme === 'dark' ? '☀️' : '🌓';
+        if (this.themeButton) {
+            this.themeButton.textContent = newTheme === 'dark' ? '☀️' : '🌓';
+        }
     }
     
     loadTheme() {
         const savedTheme = localStorage.getItem('theme') || 'light';
         document.documentElement.setAttribute('data-theme', savedTheme);
-        this.themeButton.textContent = savedTheme === 'dark' ? '☀️' : '🌓';
+        if (this.themeButton) {
+            this.themeButton.textContent = savedTheme === 'dark' ? '☀️' : '🌓';
+        }
     }
     
     escapeHtml(text) {
@@ -943,6 +1005,171 @@ async grantTokens(amount) {
         div.textContent = text;
         return div.innerHTML;
     }
+
+    async sendMessageAsync() {
+    const message = this.userInput.value.trim();
+    
+    if (!message || this.isProcessing || this.user.tokens <= 0) return;
+    
+    // Clear empty state
+    const emptyState = this.chatMessages.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+    
+    // Add user message to UI
+    const userMsgDiv = document.createElement('div');
+    userMsgDiv.className = 'message user';
+    userMsgDiv.innerHTML = `<div class="message-content">${this.escapeHtml(message)}</div>`;
+    this.chatMessages.appendChild(userMsgDiv);
+    
+    // Clear input
+    this.userInput.value = '';
+    this.userInput.style.height = 'auto';
+    this.charCount.textContent = '0';
+    this.updateSendButton();
+    
+    // Show async processing indicator
+    const asyncIndicator = document.createElement('div');
+    asyncIndicator.className = 'message assistant async-indicator';
+    asyncIndicator.id = 'async-indicator';
+    asyncIndicator.innerHTML = `
+        <div class="async-status">
+            <div class="async-spinner"></div>
+            <div class="async-text">
+                <div class="async-message">⏳ Processing asynchronously...</div>
+                <div class="async-progress">
+                    <div class="async-progress-bar" style="width: 0%"></div>
+                </div>
+                <div class="async-task-id">Task ID: pending...</div>
+            </div>
+        </div>
+    `;
+    this.chatMessages.appendChild(asyncIndicator);
+    this.scrollToBottom();
+    
+    try {
+        this.isProcessing = true;
+        this.updateSendButton();
+        
+        // Submit async task
+        const response = await this.authFetch(`${this.apiBaseUrl}/chat/async`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.accessToken}`
+            },
+            body: JSON.stringify({
+                prompt: message,
+                conversation_id: this.currentConversation?.id
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error('Failed to submit async task');
+        }
+        
+        const data = await response.json();
+        const taskId = data.task_id;
+        
+        // Update task ID display
+        const taskIdEl = asyncIndicator.querySelector('.async-task-id');
+        if (taskIdEl) taskIdEl.textContent = `Task ID: ${taskId}`;
+        
+        // Poll for results
+        await this.pollTaskStatus(taskId, asyncIndicator);
+        
+    } catch (error) {
+        console.error('Async error:', error);
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'message error';
+        errorDiv.textContent = `Error: ${error.message}`;
+        this.chatMessages.appendChild(errorDiv);
+    } finally {
+        this.isProcessing = false;
+        this.updateSendButton();
+    }
+}
+
+async pollTaskStatus(taskId, indicatorElement) {
+    const maxAttempts = 60; // 60 seconds max
+    let attempts = 0;
+    
+    const messageEl = indicatorElement.querySelector('.async-message');
+    const progressBar = indicatorElement.querySelector('.async-progress-bar');
+    
+    while (attempts < maxAttempts) {
+        try {
+            const response = await this.authFetch(`${this.apiBaseUrl}/chat/task/${taskId}`, {
+                headers: {
+                    'Authorization': `Bearer ${this.accessToken}`
+                }
+            });
+            
+            if (!response.ok) break;
+            
+            const data = await response.json();
+            
+            // Update progress
+            if (messageEl) messageEl.textContent = data.message || 'Processing...';
+            if (progressBar) progressBar.style.width = (data.progress || 0) + '%';
+            
+            // Check if complete
+            if (data.status === 'SUCCESS') {
+                // Replace indicator with actual response
+                indicatorElement.className = 'message assistant';
+                indicatorElement.innerHTML = `
+                    <div class="message-content">${this.escapeHtml(data.response)}</div>
+                    <div class="async-complete">
+                        ✅ Async response (${data.processing_time.toFixed(2)}s)
+                        ${data.from_cache ? ' (cached)' : ''}
+                    </div>
+                `;
+                
+                // Update tokens
+                if (data.tokens_used) {
+                    this.user.tokens = data.tokens_remaining;
+                    localStorage.setItem('user', JSON.stringify(this.user));
+                    this.updateTokenDisplay();
+                    this.showTokenCost(data.tokens_used);
+                }
+                
+                // Update conversation
+                if (data.conversation_id) {
+                    if (!this.currentConversation) {
+                        this.currentConversation = { id: data.conversation_id };
+                    }
+                    await this.loadConversations();
+                }
+                
+                return;
+                
+            } else if (data.status === 'FAILURE') {
+                indicatorElement.className = 'message error';
+                indicatorElement.textContent = `Async task failed: ${data.error || 'Unknown error'}`;
+                return;
+            }
+            
+        } catch (error) {
+            console.error('Poll error:', error);
+        }
+        
+        // Wait before polling again
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        attempts++;
+    }
+    
+    // Timeout
+    indicatorElement.className = 'message error';
+    indicatorElement.textContent = 'Async task timed out. Please try again.';
+}
+setMode(mode) {
+    this.useAsync = (mode === 'async');
+    
+    document.getElementById('mode-sync').classList.toggle('active', !this.useAsync);
+    document.getElementById('mode-async').classList.toggle('active', this.useAsync);
+    
+    console.log(`🔄 Mode switched to: ${this.useAsync ? 'ASYNC' : 'SYNC'}`);
+}
+
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -950,3 +1177,4 @@ document.addEventListener('DOMContentLoaded', () => {
         window.chatApp = new ChatApp();
     }, 100);
 });
+    

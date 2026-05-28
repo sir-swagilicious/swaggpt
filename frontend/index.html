@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Llama 3.1 Chat</title>
     <link rel="stylesheet" href="styles.css">
+    <div class="mode-toggle">
+    <button id="mode-sync" class="active" onclick="window.chatApp.setMode('sync')">Sync</button>
+    <button id="mode-async" onclick="window.chatApp.setMode('async')">Async</button>
+    </div>
 </head>
 <body>
     <div class="app-layout">

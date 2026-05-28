@@ -1,7 +1,6 @@
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
-from flask_login import LoginManager
-from models import db, User
+from models import db
 from config import Config
 from controllers.auth_controller import auth_bp
 from controllers.chat_controller import chat_bp
@@ -14,20 +13,6 @@ app.config.from_object(Config)
 
 # Initialize extensions
 db.init_app(app)
-from flask_bcrypt import Bcrypt
-bcrypt = Bcrypt(app)
-
-# Setup Flask-Login
-login_manager = LoginManager()
-login_manager.init_app(app)
-
-@login_manager.user_loader
-def load_user(user_id):
-    return db.session.get(User, int(user_id))
-
-@login_manager.unauthorized_handler
-def unauthorized():
-    return {'error': 'Unauthorized'}, 401
 
 # Configure CORS
 CORS(app, 
@@ -49,6 +34,7 @@ logging.basicConfig(
         logging.FileHandler('backend_debug.log')
     ]
 )
+logger = logging.getLogger(__name__)
 
 @app.after_request
 def after_request(response):
@@ -60,15 +46,20 @@ def after_request(response):
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return {
+    return jsonify({
         'status': 'healthy',
         'model': Config.MODEL_NAME
-    }
+    })
 
 # Create tables
 with app.app_context():
     db.create_all()
 
 if __name__ == '__main__':
+    print("=" * 50)
     print("🚀 Starting Llama Chat Backend")
+    print(f"📡 API: http://localhost:5000/api")
+    print(f"🎯 Model: {Config.MODEL_NAME}")
+    print(f"🔐 Auth: JWT + Redis")
+    print("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=True)

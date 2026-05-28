@@ -5,18 +5,15 @@ class AuthManager {
     }
     
     initializeEventListeners() {
-        // Tab switching
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
         });
         
-        // Login form
         document.getElementById('login-form').addEventListener('submit', (e) => {
             e.preventDefault();
             this.login();
         });
         
-        // Register form
         document.getElementById('register-form').addEventListener('submit', (e) => {
             e.preventDefault();
             this.register();
@@ -40,29 +37,25 @@ class AuthManager {
         const errorDiv = document.getElementById('login-error');
         
         try {
-            console.log('Attempting login...');
-            
             const response = await fetch(`${this.apiBaseUrl}/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',  // Important for cookies
                 body: JSON.stringify({ username, password })
             });
             
-            console.log('Login response status:', response.status);
-            
             const data = await response.json();
-            console.log('Login response data:', data);
             
             if (response.ok) {
+                // Store tokens
+                localStorage.setItem('access_token', data.access_token);
+                localStorage.setItem('refresh_token', data.refresh_token);
                 localStorage.setItem('user', JSON.stringify(data.user));
-                console.log('Login successful, redirecting...');
+                
                 window.location.href = '/';
             } else {
                 errorDiv.textContent = data.error || 'Login failed';
             }
         } catch (error) {
-            console.error('Login error:', error);
             errorDiv.textContent = 'Network error. Please try again.';
         }
     }
@@ -80,29 +73,25 @@ class AuthManager {
         }
         
         try {
-            console.log('Attempting registration...');
-            
             const response = await fetch(`${this.apiBaseUrl}/auth/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',  // Important for cookies
                 body: JSON.stringify({ username, email, password })
             });
             
-            console.log('Register response status:', response.status);
-            
             const data = await response.json();
-            console.log('Register response data:', data);
             
             if (response.ok) {
+                // Store tokens
+                localStorage.setItem('access_token', data.access_token);
+                localStorage.setItem('refresh_token', data.refresh_token);
                 localStorage.setItem('user', JSON.stringify(data.user));
-                console.log('Registration successful, redirecting...');
+                
                 window.location.href = '/';
             } else {
                 errorDiv.textContent = data.error || 'Registration failed';
             }
         } catch (error) {
-            console.error('Registration error:', error);
             errorDiv.textContent = 'Network error. Please try again.';
         }
     }

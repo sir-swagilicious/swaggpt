@@ -1115,3 +1115,97 @@ input[type="number"] {
 .game-over .guess-submit-btn {
     background: #999;
 }
+/* Async Processing Indicators */
+.async-indicator {
+    background: var(--bg-secondary) !important;
+    border: 1px solid var(--border-color);
+}
+
+.async-status {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem;
+}
+
+.async-spinner {
+    width: 24px;
+    height: 24px;
+    border: 3px solid var(--border-color);
+    border-top-color: #007aff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.async-text {
+    flex: 1;
+}
+
+.async-message {
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+}
+
+.async-progress {
+    width: 100%;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 0.25rem;
+}
+
+.async-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #007aff, #34c759);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.async-task-id {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-family: monospace;
+}
+
+.async-complete {
+    font-size: 0.75rem;
+    color: #34c759;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color);
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Add toggle button for sync/async */
+.mode-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem;
+    background: var(--bg-secondary);
+    border-radius: 20px;
+    font-size: 0.8rem;
+}
+
+.mode-toggle button {
+    padding: 0.25rem 0.75rem;
+    border: none;
+    border-radius: 16px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    transition: all 0.2s;
+}
+
+.mode-toggle button.active {
+    background: #007aff;
+    color: white;
+}
+
+.mode-toggle button:not(.active) {
+    background: transparent;
+    color: var(--text-secondary);
+}

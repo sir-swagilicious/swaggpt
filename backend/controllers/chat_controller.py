@@ -1,79 +1,94 @@
 from flask import Blueprint, request, jsonify, Response, stream_with_context
-from flask_login import login_required, current_user
+from controllers.auth_controller import jwt_required
 from services.chat_service import ChatService
 from services.llm_service import LLMService
 from models import db
+from redis_client import redis_client
+from datetime import datetime
 import json
-import asyncio
 
 chat_bp = Blueprint('chat', __name__)
 
 @chat_bp.route('/api/conversations', methods=['GET'])
-@login_required
+@jwt_required
 def get_conversations():
     """Get all conversations for current user"""
-    conversations = ChatService.get_conversations(current_user.id)
-    return jsonify({
-        'conversations': [conv.to_dict() for conv in conversations]
-    }), 200
+    try:
+        conversations = ChatService.get_conversations(request.user_id)
+        return jsonify({
+            'conversations': [conv.to_dict() for conv in conversations]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @chat_bp.route('/api/conversations', methods=['POST'])
-@login_required
+@jwt_required
 def create_conversation():
     """Create a new conversation"""
-    data = request.json or {}
-    title = data.get('title', 'New Conversation')
-    
-    conversation = ChatService.create_conversation(current_user.id, title)
-    
-    return jsonify({
-        'conversation': conversation.to_dict()
-    }), 201
+    try:
+        data = request.json or {}
+        title = data.get('title', 'New Conversation')
+        
+        conversation = ChatService.create_conversation(request.user_id, title)
+        
+        return jsonify({
+            'conversation': conversation.to_dict()
+        }), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @chat_bp.route('/api/conversations/<int:conversation_id>', methods=['GET'])
-@login_required
+@jwt_required
 def get_conversation(conversation_id):
     """Get specific conversation with messages"""
-    conversation, messages = ChatService.get_conversation(
-        conversation_id, current_user.id
-    )
-    
-    if not conversation:
-        return jsonify({'error': 'Conversation not found'}), 404
-    
-    return jsonify({
-        'conversation': conversation.to_dict(),
-        'messages': [msg.to_dict() for msg in messages]
-    }), 200
+    try:
+        conversation, messages = ChatService.get_conversation(
+            conversation_id, request.user_id
+        )
+        
+        if not conversation:
+            return jsonify({'error': 'Conversation not found'}), 404
+        
+        return jsonify({
+            'conversation': conversation.to_dict(),
+            'messages': [msg.to_dict() for msg in messages]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @chat_bp.route('/api/conversations/<int:conversation_id>', methods=['PUT'])
-@login_required
+@jwt_required
 def update_conversation(conversation_id):
     """Update conversation title"""
-    data = request.json
-    conversation, _ = ChatService.get_conversation(conversation_id, current_user.id)
-    
-    if not conversation:
-        return jsonify({'error': 'Conversation not found'}), 404
-    
-    if 'title' in data:
-        conversation.title = data['title']
-        db.session.commit()
-    
-    return jsonify({'conversation': conversation.to_dict()}), 200
+    try:
+        data = request.json
+        conversation, _ = ChatService.get_conversation(conversation_id, request.user_id)
+        
+        if not conversation:
+            return jsonify({'error': 'Conversation not found'}), 404
+        
+        if 'title' in data:
+            conversation.title = data['title']
+            db.session.commit()
+        
+        return jsonify({'conversation': conversation.to_dict()}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @chat_bp.route('/api/conversations/<int:conversation_id>', methods=['DELETE'])
-@login_required
+@jwt_required
 def delete_conversation(conversation_id):
     """Delete a conversation"""
     try:
-        ChatService.delete_conversation(conversation_id, current_user.id)
+        ChatService.delete_conversation(conversation_id, request.user_id)
         return jsonify({'message': 'Conversation deleted'}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @chat_bp.route('/api/chat/sync', methods=['POST'])
-@login_required
+@jwt_required
 def chat_sync():
     """Synchronous chat endpoint"""
     try:
@@ -86,20 +101,15 @@ def chat_sync():
         
         # Save user message
         conversation, user_message = ChatService.save_user_message(
-            conversation_id, current_user.id, prompt
+            conversation_id, request.user_id, prompt
         )
         
-        # Generate response (async)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(
-            LLMService.generate_response(prompt, current_user.id, conversation.id)
-        )
-        loop.close()
+        # Generate response
+        result = LLMService.generate_response_sync(prompt, request.user_id, conversation.id)
         
         # Deduct tokens
         user = ChatService.deduct_tokens(
-            current_user.id,
+            request.user_id,
             result['tokens_used'],
             f'Chat completion in conversation #{conversation.id}',
             tokens_processed=len(result['response'].split()),
@@ -126,7 +136,7 @@ def chat_sync():
         return jsonify({'error': str(e)}), 500
 
 @chat_bp.route('/api/chat', methods=['POST'])
-@login_required
+@jwt_required
 def chat_stream():
     """Streaming chat endpoint"""
     try:
@@ -139,14 +149,13 @@ def chat_stream():
         
         # Save user message
         conversation, user_message = ChatService.save_user_message(
-            conversation_id, current_user.id, prompt
+            conversation_id, request.user_id, prompt
         )
         
         def generate():
             try:
-                # Get streaming response
                 response = LLMService.generate_response_stream(
-                    prompt, current_user.id, conversation.id
+                    prompt, request.user_id, conversation.id
                 )
                 
                 full_response = ""
@@ -154,29 +163,26 @@ def chat_stream():
                 for line in response.iter_lines():
                     if line:
                         try:
-                            data = json.loads(line)
+                            chunk_data = json.loads(line)
                             
-                            if 'response' in data:
-                                text_chunk = data['response']
+                            if 'response' in chunk_data:
+                                text_chunk = chunk_data['response']
                                 full_response += text_chunk
-                                yield f"data: {json.dumps({'text': text_chunk, 'done': data.get('done', False)})}\n\n"
+                                yield f"data: {json.dumps({'text': text_chunk, 'done': chunk_data.get('done', False)})}\n\n"
                             
-                            if data.get('done', False):
-                                # Calculate cost
+                            if chunk_data.get('done', False):
                                 token_cost = LLMService.calculate_token_cost(
                                     len(prompt), len(full_response), 0
                                 )
                                 
-                                # Deduct tokens
                                 user = ChatService.deduct_tokens(
-                                    current_user.id,
+                                    request.user_id,
                                     token_cost,
-                                    f'Chat completion in conversation #{conversation.id}',
+                                    f'Chat completion',
                                     tokens_processed=len(full_response.split()),
                                     processing_time=0
                                 )
                                 
-                                # Save assistant message
                                 ChatService.save_assistant_message(
                                     conversation.id,
                                     full_response,

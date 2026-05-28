@@ -1,9 +1,12 @@
 from models import db, User, TokenTransaction
 from flask_bcrypt import Bcrypt
 from redis_client import redis_client
-from datetime import datetime
+from config import Config
+from datetime import datetime, timedelta  # <-- ADD timedelta here
+import jwt
 import re
 import secrets
+import requests
 
 bcrypt = Bcrypt()
 
@@ -110,6 +113,78 @@ class AuthService:
         return User.query.get(user_id)
     
     @staticmethod
+    def create_access_token(user_id, username):
+        """Create JWT access token"""
+        payload = {
+            'user_id': user_id,
+            'username': username,
+            'type': 'access',
+            'exp': datetime.utcnow() + timedelta(hours=1),
+            'iat': datetime.utcnow()
+        }
+        return jwt.encode(payload, Config.SECRET_KEY, algorithm='HS256')
+    
+    @staticmethod
+    def create_refresh_token(user_id):
+        """Create JWT refresh token"""
+        payload = {
+            'user_id': user_id,
+            'type': 'refresh',
+            'exp': datetime.utcnow() + timedelta(days=30),
+            'iat': datetime.utcnow()
+        }
+        token = jwt.encode(payload, Config.SECRET_KEY, algorithm='HS256')
+        
+        # Store refresh token in Redis with 30-day TTL
+        redis_client.client.setex(
+            f"refresh_token:{user_id}",
+            30 * 24 * 3600,
+            token
+        )
+        
+        return token
+    
+    @staticmethod
+    def verify_token(token, token_type='access'):
+        """Verify JWT token"""
+        try:
+            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
+            
+            if payload.get('type') != token_type:
+                raise ValueError('Invalid token type')
+            
+            # Check if refresh token is in Redis
+            if token_type == 'refresh':
+                stored_token = redis_client.client.get(
+                    f"refresh_token:{payload['user_id']}"
+                )
+                if not stored_token or stored_token != token:
+                    raise ValueError('Refresh token revoked')
+            
+            return payload
+            
+        except jwt.ExpiredSignatureError:
+            raise ValueError('Token expired')
+        except jwt.InvalidTokenError:
+            raise ValueError('Invalid token')
+    
+    @staticmethod
+    def refresh_access_token(refresh_token):
+        """Get new access token using refresh token"""
+        payload = AuthService.verify_token(refresh_token, 'refresh')
+        
+        user = User.query.get(payload['user_id'])
+        if not user:
+            raise ValueError('User not found')
+        
+        return AuthService.create_access_token(user.id, user.username)
+    
+    @staticmethod
+    def revoke_refresh_token(user_id):
+        """Revoke refresh token (logout)"""
+        redis_client.client.delete(f"refresh_token:{user_id}")
+    
+    @staticmethod
     def github_oauth_callback(code, state):
         """Handle GitHub OAuth callback"""
         # Validate state
@@ -117,7 +192,6 @@ class AuthService:
             raise ValueError('Invalid OAuth state')
         
         # Exchange code for access token
-        import requests
         token_response = requests.post(
             'https://github.com/login/oauth/access_token',
             data={

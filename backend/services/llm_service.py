@@ -25,8 +25,8 @@ class LLMService:
         return hashlib.md5(combined.encode()).hexdigest()
     
     @staticmethod
-    async def generate_response(prompt, user_id, conversation_id):
-        """Generate response from Ollama (async)"""
+    def generate_response_sync(prompt, user_id, conversation_id):
+        """Synchronous response generation (used by Celery tasks)"""
         start_time = time.time()
         
         # Check cache first
@@ -41,7 +41,7 @@ class LLMService:
             return {
                 'response': cached['response'],
                 'tokens_used': cached['tokens_used'],
-                'processing_time': 0.01,  # Minimal time for cached response
+                'processing_time': 0.01,
                 'from_cache': True
             }
         
