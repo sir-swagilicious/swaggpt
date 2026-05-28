@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Llama 3.1 Chat</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-layout">
+        <!-- Sidebar Overlay for Mobile -->
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+        
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <button class="new-chat-btn" id="new-chat-btn">
+                    ➕ New Chat
+                </button>
+            </div>
+            <div class="conversations-list" id="conversations-list">
+                <!-- Conversations will be loaded here -->
+            </div>
+        </aside>
+        
+        <!-- Main Chat Area -->
+        <div class="main-chat">
+            <div class="container">
+                <header class="header">
+                    <button class="toggle-sidebar-btn" id="toggle-sidebar-btn" title="Toggle sidebar">
+                        ☰
+                    </button>
+                    <h1>🦙 Llama 3.1 Chat</h1>
+                    <div class="header-controls">
+                        <div class="token-display" id="token-display">
+                            <span class="token-icon">🪙</span>
+                            <span id="token-count">0</span>
+                            <span class="token-label">tokens</span>
+                        </div>
+                        <button id="add-tokens-btn" class="btn-tokens" title="Get free tokens">
+                            ⚡ Get Tokens
+                        </button>
+                        <span id="connection-status" class="status-indicator"></span>
+                        <button id="toggle-theme" class="btn-icon" title="Toggle theme">🌓</button>
+                        <button id="logout-btn" class="btn-icon" title="Logout">🚪</button>
+                    </div>
+                </header>
+
+                <main class="chat-container">
+                    <div id="chat-messages" class="chat-messages">
+                        <div class="empty-state">
+                            <h2>🦙 Welcome to Llama Chat</h2>
+                            <p>Select a conversation or start a new one</p>
+                            <button class="new-chat-btn" onclick="window.chatApp.createNewConversation()">
+                                ➕ Start New Chat
+                            </button>
+                        </div>
+                    </div>
+                </main>
+
+                <footer class="input-container">
+                    <div class="input-wrapper">
+                        <textarea 
+                            id="user-input" 
+                            placeholder="Type your message here... (Shift+Enter for new line)"
+                            rows="1"
+                        ></textarea>
+                        <button id="send-button" class="btn-send" disabled>
+                            <span class="send-icon">➤</span>
+                        </button>
+                    </div>
+                    <div class="input-info">
+                        <span id="char-count">0</span> characters | 
+                        <span id="model-name">llama3.1:8b</span>
+                    </div>
+                    <div id="token-warning" class="token-warning" style="display: none;">
+                        ⚠️ You're running low on tokens! Click "Get Tokens" to get more.
+                    </div>
+                </footer>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
