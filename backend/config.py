@@ -5,9 +5,9 @@ class Config:
     # Flask
     SECRET_KEY = os.environ.get('SECRET_KEY', os.urandom(24).hex())
     
-    # Database
+    # Database - add both sync and async URLs
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', 'sqlite:///llama_chat.db')
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    DATABASE_URL = os.environ.get('DATABASE_URL', 'sqlite:///llama_chat.db')
     
     # Redis
     REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')

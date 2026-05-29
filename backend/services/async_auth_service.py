@@ -1,31 +1,26 @@
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from models import User, TokenTransaction
 from database import async_session_factory
-from redis_client import redis_client, async_redis_client
-from sqlalchemy import select
-from datetime import datetime, timedelta
 from flask_bcrypt import Bcrypt
-from utils import run_async
+from redis_client import async_redis_client
+from config import Config
+from datetime import datetime, timedelta
 import jwt
 import re
 import secrets
-import requests
-import os
 
 bcrypt = Bcrypt()
 
-SECRET_KEY = os.environ.get('SECRET_KEY', os.urandom(24).hex())
-GITHUB_CLIENT_ID = os.environ.get('GITHUB_CLIENT_ID', '')
-GITHUB_CLIENT_SECRET = os.environ.get('GITHUB_CLIENT_SECRET', '')
-
-class AuthService:
+class AsyncAuthService:
     @staticmethod
     def validate_email(email):
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         return re.match(pattern, email) is not None
     
     @staticmethod
-    def register_user(username, email, password):
-        """Register a new user - synchronous wrapper"""
+    async def register_user(username: str, email: str, password: str):
+        """Async user registration"""
         if not username or not email or not password:
             raise ValueError('All fields are required')
         
@@ -35,14 +30,9 @@ class AuthService:
         if len(password) < 6:
             raise ValueError('Password must be at least 6 characters')
         
-        if not AuthService.validate_email(email):
+        if not AsyncAuthService.validate_email(email):
             raise ValueError('Invalid email format')
         
-        return run_async(AuthService._register_user_async(username, email, password))
-    
-    @staticmethod
-    async def _register_user_async(username, email, password):
-        """Register a new user - async implementation"""
         async with async_session_factory() as session:
             # Check existing user
             result = await session.execute(
@@ -77,19 +67,21 @@ class AuthService:
             )
             session.add(transaction)
             await session.commit()
-            await session.refresh(user)
+            
+            # Cache in Redis async
+            await async_redis_client.set_session(user.id, {
+                'user_id': user.id,
+                'username': user.username,
+                'created_at': datetime.utcnow().isoformat()
+            })
             
             return user
     
     @staticmethod
-    def login_user(username_or_email, password):
-        """Login user - synchronous wrapper"""
-        return run_async(AuthService._login_user_async(username_or_email, password))
-    
-    @staticmethod
-    async def _login_user_async(username_or_email, password):
-        """Login user - async implementation"""
+    async def login_user(username_or_email: str, password: str):
+        """Async user login"""
         async with async_session_factory() as session:
+            # Find user
             result = await session.execute(
                 select(User).where(
                     (User.username == username_or_email) | 
@@ -101,30 +93,42 @@ class AuthService:
             if not user or not bcrypt.check_password_hash(user.password_hash, password):
                 raise ValueError('Invalid username or password')
             
+            # Update last login
             user.last_login = datetime.utcnow()
             await session.commit()
-            await session.refresh(user)
+            
+            # Cache session
+            await async_redis_client.set_session(user.id, {
+                'user_id': user.id,
+                'username': user.username,
+                'login_time': datetime.utcnow().isoformat()
+            })
             
             return user
     
     @staticmethod
-    def get_user_by_id(user_id):
-        """Get user by ID - synchronous wrapper"""
-        return run_async(AuthService._get_user_by_id_async(user_id))
-    
-    @staticmethod
-    async def _get_user_by_id_async(user_id):
-        """Get user by ID - async implementation"""
+    async def get_user_by_id(user_id: int):
+        """Async get user by ID"""
+        # Try Redis first
+        cached = await async_redis_client.get_session(user_id)
+        if cached:
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    select(User).where(User.id == user_id)
+                )
+                user = result.scalar_one_or_none()
+                if user:
+                    return user
+        
         async with async_session_factory() as session:
             result = await session.execute(
                 select(User).where(User.id == user_id)
             )
-            user = result.scalar_one_or_none()
-            return user
+            return result.scalar_one_or_none()
     
     @staticmethod
-    def create_access_token(user_id, username):
-        """Create JWT access token - pure sync, no IO"""
+    def create_access_token(user_id: int, username: str):
+        """Create JWT access token (sync - no IO needed)"""
         payload = {
             'user_id': user_id,
             'username': username,
@@ -132,50 +136,54 @@ class AuthService:
             'exp': datetime.utcnow() + timedelta(hours=1),
             'iat': datetime.utcnow()
         }
-        return jwt.encode(payload, SECRET_KEY, algorithm='HS256')
+        return jwt.encode(payload, Config.SECRET_KEY, algorithm='HS256')
     
     @staticmethod
-    def create_refresh_token(user_id):
-        """Create JWT refresh token - pure sync, no IO"""
+    def create_refresh_token(user_id: int):
+        """Create JWT refresh token"""
         payload = {
             'user_id': user_id,
             'type': 'refresh',
             'exp': datetime.utcnow() + timedelta(days=30),
             'iat': datetime.utcnow()
         }
-        return jwt.encode(payload, SECRET_KEY, algorithm='HS256')
+        token = jwt.encode(payload, Config.SECRET_KEY, algorithm='HS256')
+        return token
     
     @staticmethod
-    def store_refresh_token(user_id, token):
-        """Store refresh token - synchronous wrapper"""
-        return run_async(AuthService._store_refresh_token_async(user_id, token))
+    async def store_refresh_token(user_id: int, token: str):
+        """Store refresh token in Redis async"""
+        await async_redis_client.client.setex(
+            f"refresh_token:{user_id}",
+            30 * 24 * 3600,
+            token
+        )
     
     @staticmethod
-    async def _store_refresh_token_async(user_id, token):
-        """Store refresh token - async implementation"""
-        client = await async_redis_client.connect()
-        await client.setex(f"refresh_token:{user_id}", 30 * 24 * 3600, token)
-    
-    @staticmethod
-    def verify_token(token, token_type='access'):
-        """Verify JWT token - pure sync, no IO"""
+    def verify_token(token: str, token_type: str = 'access'):
+        """Verify JWT token (sync - no IO needed)"""
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
+            
             if payload.get('type') != token_type:
                 raise ValueError('Invalid token type')
+            
             return payload
+            
         except jwt.ExpiredSignatureError:
             raise ValueError('Token expired')
         except jwt.InvalidTokenError:
             raise ValueError('Invalid token')
     
     @staticmethod
-    def revoke_refresh_token(user_id):
-        """Revoke refresh token - synchronous wrapper"""
-        return run_async(AuthService._revoke_refresh_token_async(user_id))
-    
-    @staticmethod
-    async def _revoke_refresh_token_async(user_id):
-        """Revoke refresh token - async implementation"""
-        client = await async_redis_client.connect()
-        await client.delete(f"refresh_token:{user_id}")
+    async def verify_refresh_token(token: str):
+        """Verify refresh token with Redis check (async)"""
+        payload = AsyncAuthService.verify_token(token, 'refresh')
+        
+        stored_token = await async_redis_client.client.get(
+            f"refresh_token:{payload['user_id']}"
+        )
+        if not stored_token or stored_token.decode() != token:
+            raise ValueError('Refresh token revoked')
+        
+        return payload

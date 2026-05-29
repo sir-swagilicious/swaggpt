@@ -301,83 +301,97 @@ class ChatApp {
         }
     }
     
-    async sendMessage() {
-        if (!this.userInput) return;
-        
-        const message = this.userInput.value.trim();
-        
-        if (!message || this.isProcessing || (this.user && this.user.tokens <= 0)) {
-            return;
-        }
-        
-        // Clear empty state
-        const emptyState = this.chatMessages?.querySelector('.empty-state');
-        if (emptyState) emptyState.remove();
-        
-        // Add user message to UI
-        this._addMessageToUI(message, 'user');
-        
-        // Clear input
-        this.userInput.value = '';
-        this.userInput.style.height = 'auto';
-        if (this.charCount) this.charCount.textContent = '0';
+// In the ChatApp class, update sendMessage:
+
+async sendMessage() {
+    if (!this.userInput) return;
+    
+    const message = this.userInput.value.trim();
+    
+    if (!message || this.isProcessing || (this.user && this.user.tokens <= 0)) {
+        return;
+    }
+    
+    // Clear empty state
+    const emptyState = this.chatMessages?.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+    
+    // Add user message to UI
+    this._addMessageToUI(message, 'user');
+    
+    // Clear input
+    this.userInput.value = '';
+    this.userInput.style.height = 'auto';
+    if (this.charCount) this.charCount.textContent = '0';
+    this._updateSendButtonState();
+    
+    // Show typing indicator
+    const typingIndicator = this._showTypingIndicator();
+    
+    try {
+        this.isProcessing = true;
         this._updateSendButtonState();
         
-        // Show typing indicator
-        const typingIndicator = this._showTypingIndicator();
+        // Use /api/chat with async mode header
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.accessToken}`
+        };
         
-        try {
-            this.isProcessing = true;
-            this._updateSendButtonState();
-            
-            const response = await this.authFetch(`${this.apiBaseUrl}/chat/sync`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    prompt: message,
-                    conversation_id: this.currentConversation?.id
-                })
-            });
-            
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || `HTTP ${response.status}`);
-            }
-            
-            const data = await response.json();
-            
-            // Remove typing indicator
-            this._removeTypingIndicator(typingIndicator);
-            
-            // Add assistant message
-            if (data.response) {
-                this._addMessageToUI(data.response, 'assistant');
-            }
-            
-            // Update tokens
-            if (data.tokens_used) {
-                this.user.tokens = data.tokens_remaining;
-                localStorage.setItem('user', JSON.stringify(this.user));
-                this.updateTokenDisplay();
-                this._showTokenCost(data.tokens_used);
-            }
-            
-            // Update conversation
-            if (data.conversation_id) {
-                if (!this.currentConversation) {
-                    this.currentConversation = { id: data.conversation_id };
-                }
-                await this.loadConversations();
-            }
-            
-        } catch (error) {
-            console.error('Error:', error);
-            this._removeTypingIndicator(typingIndicator);
-            this._addMessageToUI(`Error: ${error.message}`, 'error');
-        } finally {
-            this.isProcessing = false;
-            this._updateSendButtonState();
+        // Add async mode header if enabled
+        if (this.useAsync) {
+            headers['X-Async-Mode'] = 'true';
         }
+        
+        const response = await fetch(`${this.apiBaseUrl}/chat`, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({
+                prompt: message,
+                conversation_id: this.currentConversation?.id
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        // Remove typing indicator
+        this._removeTypingIndicator(typingIndicator);
+        
+        // Add assistant message
+        if (data.response) {
+            this._addMessageToUI(data.response, 'assistant');
+        }
+        
+        // Update tokens
+        if (data.tokens_used) {
+            this.user.tokens = data.tokens_remaining;
+            localStorage.setItem('user', JSON.stringify(this.user));
+            this.updateTokenDisplay();
+            this._showTokenCost(data.tokens_used);
+        }
+        
+        // Update conversation
+        if (data.conversation_id) {
+            if (!this.currentConversation) {
+                this.currentConversation = { id: data.conversation_id };
+            }
+            await this.loadConversations();
+        }
+        
+    } catch (error) {
+        console.error('Error:', error);
+        this._removeTypingIndicator(typingIndicator);
+        this._addMessageToUI(`Error: ${error.message}`, 'error');
+    } finally {
+        this.isProcessing = false;
+        this._updateSendButtonState();
     }
+}
     
     _addMessageToUI(content, type) {
         if (!this.chatMessages) return;

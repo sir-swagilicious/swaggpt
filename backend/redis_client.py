@@ -1,58 +1,67 @@
-import redis
+import redis.asyncio as aioredis
+import redis as sync_redis
 import json
-from config import Config
+import os
 
-class RedisClient:
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+
+class AsyncRedisClient:
     def __init__(self):
-        self.client = redis.Redis.from_url(
-            Config.REDIS_URL,
-            decode_responses=True
-        )
+        self.client = None
     
-    def set_session(self, user_id, session_data, ttl=604800):
-        """Store session data with 7-day TTL"""
+    async def connect(self):
+        """Initialize async Redis connection"""
+        if not self.client:
+            self.client = aioredis.from_url(
+                REDIS_URL,
+                decode_responses=True
+            )
+        return self.client
+    
+    async def set_session(self, user_id, session_data, ttl=604800):
+        """Store session data"""
+        client = await self.connect()
         key = f"session:{user_id}"
-        self.client.setex(key, ttl, json.dumps(session_data))
+        await client.setex(key, ttl, json.dumps(session_data))
     
-    def get_session(self, user_id):
+    async def get_session(self, user_id):
         """Retrieve session data"""
+        client = await self.connect()
         key = f"session:{user_id}"
-        data = self.client.get(key)
+        data = await client.get(key)
         return json.loads(data) if data else None
     
-    def delete_session(self, user_id):
+    async def delete_session(self, user_id):
         """Delete session data"""
+        client = await self.connect()
         key = f"session:{user_id}"
-        self.client.delete(key)
+        await client.delete(key)
     
-    def cache_response(self, key, data, ttl=3600):
-        """Cache LLM responses"""
+    async def cache_response(self, key, data, ttl=3600):
+        """Cache LLM response"""
+        client = await self.connect()
         cache_key = f"cache:{key}"
-        self.client.setex(cache_key, ttl, json.dumps(data))
+        await client.setex(cache_key, ttl, json.dumps(data))
     
-    def get_cached_response(self, key):
+    async def get_cached_response(self, key):
         """Get cached LLM response"""
+        client = await self.connect()
         cache_key = f"cache:{key}"
-        data = self.client.get(cache_key)
+        data = await client.get(cache_key)
         return json.loads(data) if data else None
     
-    def store_oauth_state(self, state, ttl=600):
-        """Store OAuth state for GitHub auth"""
-        self.client.setex(f"oauth:{state}", ttl, "1")
+    async def store_oauth_state(self, state, ttl=600):
+        """Store OAuth state"""
+        client = await self.connect()
+        await client.setex(f"oauth:{state}", ttl, "1")
     
-    def validate_oauth_state(self, state):
+    async def validate_oauth_state(self, state):
         """Validate OAuth state"""
-        return self.client.exists(f"oauth:{state}")
-    
-    def add_to_queue(self, queue_name, data):
-        """Add task to Redis queue"""
-        self.client.lpush(queue_name, json.dumps(data))
-    
-    def get_from_queue(self, queue_name, timeout=0):
-        """Get task from Redis queue (blocking)"""
-        result = self.client.brpop(queue_name, timeout=timeout)
-        if result:
-            return json.loads(result[1])
-        return None
+        client = await self.connect()
+        return await client.exists(f"oauth:{state}")
 
-redis_client = RedisClient()
+# Create async client instance
+async_redis_client = AsyncRedisClient()
+
+# Create sync client for backward compatibility
+redis_client = sync_redis.Redis.from_url(REDIS_URL, decode_responses=True)
